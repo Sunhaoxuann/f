@@ -31,12 +31,14 @@ def strict_clean_data(data):
                                         data['Accelerometer_y']**2 + 
                                         data['Accelerometer_z']**2)
     
-    # 严格识别自由落体阶段（加速度接近重力加速度且变化平缓）
     gravity = 9.8
-    g = 0.5  # 定义一个容忍范围
+    g = 2.0  #!!! 放宽到2，使数据更多
     free_fall_data = data[(data['Total_Acceleration'] > gravity - g) & 
-                            (data['Total_Acceleration'] < gravity + g) &
-                            (data['Accelerometer_z'] < 0)]
+                          (data['Total_Acceleration'] < gravity + g) &
+                          (data['Accelerometer_z'] < 0)]
+    #!!! 若自由落体段太少则直接用全部有效值
+    if len(free_fall_data) < 5:
+        free_fall_data = data.dropna()
     
     return free_fall_data
 
@@ -53,14 +55,20 @@ def calculate_velocity_and_drag_strict(data):
         time_interval = data['Accelerometer_time'].iloc[i] - data['Accelerometer_time'].iloc[i-1]
         avg_acceleration = (data['Total_Acceleration'].iloc[i] + 
                             data['Total_Acceleration'].iloc[i-1]) / 2
-        # 修正这里：使用正确的loc赋值语法
         data.loc[data.index[i], 'Velocity'] = data['Velocity'].iloc[i-1] + avg_acceleration * time_interval
     
-    data['Air_Drag'] = data['Total_Acceleration'] - gravity
+    #!!! 修正空气阻力方向
+    data['Air_Drag'] = gravity - data['Total_Acceleration']
     
     return data
 
 combined_data = calculate_velocity_and_drag_strict(combined_data)
+
+#!!! 过滤零或者负速度，防止非物理���据影响R²，建议拟合前都这样做
+combined_data = combined_data[combined_data['Velocity'] > 0]
+
+#!!! 可选：过滤极端异常的Air_Drag（如大于10N情况），防止离群点影响R²
+combined_data = combined_data[np.abs(combined_data['Air_Drag']) < 10]
 
 # 去除NaN值
 combined_data = combined_data.dropna(subset=['Velocity', 'Air_Drag'])
@@ -68,6 +76,9 @@ combined_data = combined_data.dropna(subset=['Velocity', 'Air_Drag'])
 # 准备数据
 x_data = combined_data['Velocity'].values
 y_data = combined_data['Air_Drag'].values
+
+#!!! 可选：输出数据点数方便检查
+print("可用于拟合的数据点数量：", len(x_data))
 
 # 定义拟合函数
 def linear_func(x, a, b):
@@ -125,7 +136,7 @@ for name, model in fit_results.items():
         else:
             p0 = None  # 其他模型使用默认初始参数
         
-        # 尝试拟合
+        # 拟合
         if p0:
             params, _ = curve_fit(model['func'], x_data, y_data, p0=p0, maxfev=10000)
         else:
